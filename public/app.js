@@ -169,14 +169,8 @@ async function selectorPadre(tipo, { origen }) {
         actual: (relaciones, codigo) => relaciones.find((r) => r.destino === codigo)?.origen || '',
         mostrar: (relaciones, codigo) => { select.value = relaciones.find((r) => r.destino === codigo)?.origen || '' },
         limpiar: () => { select.value = '' },
-
-        // Asignar otro padre reemplaza al anterior (lo hace el backend); vaciarlo quita la relación
-        async guardar(relaciones, codigo) {
-            const anterior = this.actual(relaciones, codigo)
-            if (select.value === anterior) return
-            if (select.value) await api('PUT', `relaciones/${tipo}/${enc(select.value)}/${enc(codigo)}`, {})
-            else await api('DELETE', `relaciones/${tipo}/${enc(anterior)}/${enc(codigo)}`)
-        }
+        // Lo que se manda al backend: el codigo del padre, o null para quitarlo
+        valor: () => select.value || null
     }
 }
 
@@ -199,10 +193,6 @@ async function listaHijos(tipo, { destino, propiedades }) {
         filas.append(fila)
     }
 
-    const deseadas = (codigo) => [...filas.children]
-        .map((fila) => ({ destino: fila.querySelector('select').value, propiedades: leer(fila, propiedades) }))
-        .filter((fila) => fila.destino && fila.destino !== codigo) // un nodo no se relaciona consigo mismo
-
     const titulo = TITULOS_LISTA[tipo] || `${destino.join(' o ')} (${tipo})`
     return {
         tipo,
@@ -216,29 +206,17 @@ async function listaHijos(tipo, { destino, propiedades }) {
             relaciones.filter((r) => r.origen === codigo).forEach((r) => agregarFila(r.destino, r.propiedades))
         },
         limpiar: () => filas.replaceChildren(),
-
-        // Quita las filas eliminadas y crea o actualiza las que quedan
-        async guardar(relaciones, codigo) {
-            const quedan = deseadas(codigo)
-            for (const r of relaciones.filter((r) => r.origen === codigo)) {
-                if (!quedan.some((d) => d.destino === r.destino)) {
-                    await api('DELETE', `relaciones/${tipo}/${enc(codigo)}/${enc(r.destino)}`)
-                }
-            }
-            for (const d of quedan) {
-                await api('PUT', `relaciones/${tipo}/${enc(codigo)}/${enc(d.destino)}`, d.propiedades)
-            }
-        }
+        // Lo que se manda al backend: la lista completa (el backend quita las que ya no están)
+        valor: () => [...filas.children]
+            .map((fila) => ({ destino: fila.querySelector('select').value, propiedades: leer(fila, propiedades) }))
+            .filter((fila) => fila.destino)
     }
 }
 
-// Editores de relaciones que van en el formulario de una etiqueta, según el esquema
+// Editores de relaciones que van en el formulario de una etiqueta (la regla vive en el backend)
 function editoresDe(etiqueta) {
-    return Promise.all(Object.entries(esquema.RELACIONES).flatMap(([tipo, relacion]) => {
-        if (relacion.unico && relacion.destino.includes(etiqueta)) return [selectorPadre(tipo, relacion)]
-        if (!relacion.unico && relacion.origen === etiqueta) return [listaHijos(tipo, relacion)]
-        return []
-    }))
+    return Promise.all(esquema.EDITABLES[etiqueta].map(({ tipo, lado }) =>
+        lado === 'padre' ? selectorPadre(tipo, esquema.RELACIONES[tipo]) : listaHijos(tipo, esquema.RELACIONES[tipo])))
 }
 
 // ---------- Catálogo: un nodo con sus relaciones ----------
@@ -311,13 +289,14 @@ async function vistaEntidad(ruta) {
 
     form.addEventListener('submit', intentar(async (evento) => {
         evento.preventDefault()
-        const datos = leer(camposNodo, propiedades)
         const codigoNodo = editando || codigo.value.trim()
-        if (editando) await api('PUT', `${ruta}/${enc(editando)}`, datos)
-        else await api('POST', ruta, { codigo: codigoNodo, ...datos })
-
-        // Primero el nodo, después sus relaciones (necesitan que el nodo exista)
-        for (const editor of editores) await editor.guardar(relaciones[editor.tipo], codigoNodo)
+        // Una sola petición con el nodo y sus relaciones: el backend las guarda en una transacción
+        const cuerpo = {
+            ...leer(camposNodo, propiedades),
+            relaciones: Object.fromEntries(editores.map((editor) => [editor.tipo, editor.valor()]))
+        }
+        if (editando) await api('PUT', `${ruta}/${enc(editando)}`, cuerpo)
+        else await api('POST', ruta, { codigo: codigoNodo, ...cuerpo })
 
         avisar(`${editando ? 'Se actualizó' : 'Se creó'} ${etiqueta} ${codigoNodo}`)
         limpiar()

@@ -1,6 +1,11 @@
+const { AsyncLocalStorage } = require('async_hooks')
 const neo4j = require('neo4j-driver')
 
 let driver
+
+// Transacción abierta en el flujo actual (si la hay). Así los models no cambian:
+// usan ejecutar() igual y, dentro de enTransaccion(), todo va a la misma transacción.
+const transaccionActual = new AsyncLocalStorage()
 
 const conectarDB = async () => {
     const { NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD } = process.env
@@ -28,14 +33,29 @@ const conEnteros = (valor) => {
 }
 
 // Ejecuta una consulta Cypher y devuelve un arreglo de objetos planos.
-// El driver abre y cierra la sesión por nosotros en cada llamada.
+// Fuera de una transacción, cada consulta es su propia transacción (el driver abre y cierra la sesión).
 const ejecutar = async (cypher, params = {}) => {
-    const { records } = await driver.executeQuery(cypher, conEnteros(params))
+    const tx = transaccionActual.getStore()
+    const { records } = tx
+        ? await tx.run(cypher, conEnteros(params))
+        : await driver.executeQuery(cypher, conEnteros(params))
     return records.map((registro) => registro.toObject())
+}
+
+// Atomicidad: todo lo que se ejecute dentro de fn va en UNA transacción.
+// Si fn lanza un error, Neo4j deshace todo; si termina bien, se confirma todo junto.
+// El bookmark manager compartido hace que las lecturas posteriores vean este commit (durabilidad causal).
+const enTransaccion = async (fn) => {
+    const session = driver.session({ bookmarkManager: driver.executeQueryBookmarkManager })
+    try {
+        return await session.executeWrite((tx) => transaccionActual.run(tx, fn))
+    } finally {
+        await session.close()
+    }
 }
 
 const cerrarDB = async () => {
     if (driver) await driver.close()
 }
 
-module.exports = { conectarDB, ejecutar, cerrarDB }
+module.exports = { conectarDB, ejecutar, enTransaccion, cerrarDB }

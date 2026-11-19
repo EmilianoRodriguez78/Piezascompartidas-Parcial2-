@@ -27,6 +27,15 @@ const RELACIONES = {
 // Niveles máximos de ensamble → subensamble → pieza que recorren las consultas
 const PROFUNDIDAD_MAXIMA = 6
 
+// Relaciones que se guardan junto con un nodo de esta etiqueta:
+//  - 'padre': relación única donde el nodo es el destino (ej. la marca de un modelo)
+//  - 'hijos': relación donde el nodo es el origen (ej. los ensambles que usa un modelo)
+const relacionesEditables = (etiqueta) => Object.entries(RELACIONES).flatMap(([tipo, relacion]) => {
+    if (relacion.unico && relacion.destino.includes(etiqueta)) return [{ tipo, lado: 'padre' }]
+    if (!relacion.unico && relacion.origen === etiqueta) return [{ tipo, lado: 'hijos' }]
+    return []
+})
+
 // Neo4j solo guarda valores simples como propiedad (no objetos)
 const esValorSimple = (valor) => ['string', 'number', 'boolean'].includes(typeof valor)
 
@@ -34,4 +43,4 @@ const esValorSimple = (valor) => ['string', 'number', 'boolean'].includes(typeof
 const filtrarPropiedades = (datos = {}, permitidas) =>
     Object.fromEntries(Object.entries(datos).filter(([clave, valor]) => permitidas.includes(clave) && esValorSimple(valor)))
 
-module.exports = { ENTIDADES, RELACIONES, PROFUNDIDAD_MAXIMA, filtrarPropiedades }
+module.exports = { ENTIDADES, RELACIONES, PROFUNDIDAD_MAXIMA, relacionesEditables, filtrarPropiedades }

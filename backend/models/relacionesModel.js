@@ -7,9 +7,14 @@ const crearRelacionModel = (tipo, { origen, destino, unico }) => {
     // (b:Ensamble OR b:Pieza) cuando el destino admite varias etiquetas
     const filtroDestino = destino.map((etiqueta) => `b:${etiqueta}`).join(' OR ')
     const devolver = 'RETURN a.codigo AS origen, b.codigo AS destino, properties(r) AS propiedades'
-    // Relación única: antes de crear la nueva se quita la que el destino tuviera con otro origen
+    // Relación única: antes de crear la nueva se quita la que el destino tuviera con otro origen.
+    // Aislamiento: primero se bloquea el destino (escribir en él toma su candado hasta el commit).
+    // Así, si dos peticiones asignan a la vez otra marca al mismo modelo, la segunda espera,
+    // ve la relación que dejó la primera y la reemplaza: nunca quedan dos.
     const quitarAnterior = unico
-        ? `OPTIONAL MATCH (otro:${origen})-[anterior:${tipo}]->(b) WHERE otro <> a
+        ? `SET b._bloqueo = true REMOVE b._bloqueo
+           WITH a, b
+           OPTIONAL MATCH (otro:${origen})-[anterior:${tipo}]->(b) WHERE otro <> a
            DELETE anterior
            WITH DISTINCT a, b`
         : ''
@@ -42,7 +47,22 @@ const crearRelacionModel = (tipo, { origen, destino, unico }) => {
                 { codigoOrigen, codigoDestino }
             )
             return eliminadas > 0
-        }
+        },
+
+        // Quita la relación que llega a este destino (ej. dejar un modelo sin plataforma)
+        quitarPadre: (codigoDestino) => ejecutar(
+            `MATCH (:${origen})-[r:${tipo}]->(b {codigo: $codigoDestino}) WHERE ${filtroDestino}
+             DELETE r`,
+            { codigoDestino }
+        ),
+
+        // Quita las relaciones que salen de este origen hacia destinos que ya no están en la lista
+        quitarHijosExcepto: (codigoOrigen, destinosQueQuedan) => ejecutar(
+            `MATCH (a:${origen} {codigo: $codigoOrigen})-[r:${tipo}]->(b)
+             WHERE NOT b.codigo IN $destinosQueQuedan
+             DELETE r`,
+            { codigoOrigen, destinosQueQuedan }
+        )
     }
 }
 

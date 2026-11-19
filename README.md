@@ -108,6 +108,23 @@ Solo se guardan las propiedades del modelo; el resto del body se ignora.
 curl -X POST http://localhost:5000/api/piezas -H "Content-Type: application/json" -d "{\"codigo\":\"PZ-FARO\",\"nombre\":\"Faro LED\",\"categoria\":\"electrica\",\"critica\":false}"
 ```
 
+`POST` y `PUT` aceptan además `relaciones`, para guardar el nodo **y** sus relaciones en una sola transacción (es lo que usa el frontend):
+
+```json
+{
+  "codigo": "MOD-X", "nombre": "Vela X",
+  "relaciones": {
+    "FABRICA": "MRC-Vela",
+    "BASE_DE": null,
+    "USA": [{ "destino": "ENS-AIRBAG" }, { "destino": "ENS-FRENOS" }]
+  }
+}
+```
+
+* Relación única (`TIENE_MARCA`, `FABRICA`, `BASE_DE`): el codigo del origen, o `null` para quitarla.
+* Las demás (`USA`, `CONTIENE`, `SURTE`): la lista completa de `{ destino, propiedades }`. Las que no estén en la lista se quitan.
+* Solo se aceptan las relaciones que corresponden a esa entidad (`GET /api/esquema` → `EDITABLES`). Las que no se mandan no cambian.
+
 ### Relaciones
 
 `<TIPO>` es una de: `TIENE_MARCA`, `FABRICA`, `BASE_DE`, `USA`, `CONTIENE`, `SURTE`.
@@ -166,6 +183,19 @@ Cuando algo falla, la API responde el código HTTP, su significado y el detalle.
 | 409 | Conflicto: la operación choca con datos que ya existen | Crear un nodo con un `codigo` que ya está en uso |
 | 500 | Error interno del servidor | Neo4j no responde (por ejemplo, la instancia está pausada) |
 
+## Transacciones (ACID)
+
+Neo4j es una base de datos transaccional. Así se aprovecha cada propiedad en el proyecto:
+
+| Propiedad | Cómo se cumple |
+|---|---|
+| **Atomicidad** | Cada petición se ejecuta en una transacción. Guardar un nodo con sus relaciones (`POST`/`PUT` con `relaciones`) y el seed (borrar + cargar) usan `enTransaccion()` en `config/db.js`: si algo falla, Neo4j deshace todo y no quedan datos a medias. |
+| **Consistencia** | Restricción de unicidad de `codigo` por etiqueta (se crea al arrancar), validación de datos en los controladores, relaciones únicas (un modelo tiene una sola marca y una sola plataforma) y ningún nodo relacionado consigo mismo. |
+| **Aislamiento** | Neo4j aísla las transacciones con nivel *read committed*. Al asignar una relación única, el destino se bloquea antes de leer la anterior, así dos peticiones simultáneas no pueden dejar a un modelo con dos marcas. |
+| **Durabilidad** | Neo4j escribe en su registro de transacciones antes de confirmar, y la API responde solo después del commit. Las lecturas posteriores usan los mismos *bookmarks* del driver, así siempre ven lo confirmado. |
+
+Las restricciones de unicidad se crean fuera de la transacción del seed porque Neo4j no permite mezclar cambios de esquema y de datos en una misma transacción.
+
 ## Estructura
 
 ```
@@ -173,7 +203,7 @@ backend/
   server.js                    arranque: arma rutas → controladores → modelos a partir del esquema,
                                sirve el frontend, conecta a Neo4j y levanta Express
   config/
-    db.js                      driver de Neo4j y función ejecutar(cypher, params)
+    db.js                      driver de Neo4j, ejecutar(cypher, params) y enTransaccion(fn)
     esquema.js                 etiquetas, propiedades y relaciones del grafo
     seed.js                    carga inicial (npm run seed)
     datos.js                   datos sintéticos
