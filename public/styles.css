@@ -45,7 +45,7 @@ nav { display: flex; flex-wrap: wrap; gap: 6px; }
 #secciones button.activa { background: var(--primario); color: #fff; }
 
 /* Paneles: formulario a la izquierda, tabla a la derecha */
-#contenido-catalogo { display: grid; grid-template-columns: minmax(260px, 1fr) 2fr; gap: 16px; align-items: start; }
+#contenido-catalogo { display: grid; grid-template-columns: minmax(300px, 1fr) 1.7fr; gap: 16px; align-items: start; }
 #consultas { display: grid; grid-template-columns: repeat(auto-fill, minmax(420px, 1fr)); gap: 16px; }
 
 @media (max-width: 800px) {
@@ -79,6 +79,24 @@ input, select {
 }
 
 input:disabled { background: var(--fondo); }
+
+/* Relaciones dentro del formulario de un nodo */
+fieldset {
+    border: 1px solid var(--borde);
+    border-radius: 6px;
+    padding: 8px 10px 10px;
+    margin: 0;
+    display: grid;
+    gap: 6px;
+}
+
+legend { font-size: 0.85rem; color: var(--suave); padding: 0 4px; }
+
+.filas { display: grid; gap: 6px; }
+.fila { display: flex; flex-wrap: wrap; gap: 4px; }
+.fila select { flex: 1 1 160px; min-width: 0; }
+.fila input { flex: 1 1 70px; width: 70px; }
+fieldset > button { justify-self: start; }
 
 button {
     font: inherit;

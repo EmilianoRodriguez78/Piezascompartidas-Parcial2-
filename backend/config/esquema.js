@@ -13,11 +13,12 @@ const ENTIDADES = {
     proveedores: { etiqueta: 'Proveedor',  propiedades: ['nombre', 'pais', 'calificacion'] }
 }
 
-// Dirección: de lo general a lo particular
+// Dirección: de lo general a lo particular.
+// unico: el destino tiene un solo origen (un modelo tiene una sola marca); asignar otro reemplaza al anterior.
 const RELACIONES = {
-    TIENE_MARCA: { origen: 'Grupo',      destino: ['Marca'],             propiedades: [] },
-    FABRICA:     { origen: 'Marca',      destino: ['Modelo'],            propiedades: [] },
-    BASE_DE:     { origen: 'Plataforma', destino: ['Modelo'],            propiedades: [] },
+    TIENE_MARCA: { origen: 'Grupo',      destino: ['Marca'],             propiedades: [], unico: true },
+    FABRICA:     { origen: 'Marca',      destino: ['Modelo'],            propiedades: [], unico: true },
+    BASE_DE:     { origen: 'Plataforma', destino: ['Modelo'],            propiedades: [], unico: true },
     USA:         { origen: 'Modelo',     destino: ['Ensamble'],          propiedades: [] },
     CONTIENE:    { origen: 'Ensamble',   destino: ['Ensamble', 'Pieza'], propiedades: ['cantidad'] },
     SURTE:       { origen: 'Proveedor',  destino: ['Pieza'],             propiedades: ['costo_unitario', 'dias_entrega'] }

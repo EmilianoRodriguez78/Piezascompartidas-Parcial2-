@@ -1,5 +1,9 @@
 // Frontend sin frameworks. Solo habla con la API (nunca con Neo4j directamente).
 // Los formularios se generan a partir de GET /api/esquema, el mismo esquema que usa el backend.
+//
+// Cada relación se captura en el formulario de un nodo:
+//  - Relación única (unico): en el formulario del destino, con un selector. Ej.: la marca de un modelo.
+//  - Las demás: en el formulario del origen, como una lista de filas. Ej.: los ensambles que usa un modelo.
 
 // Tipo de input para las propiedades que no son texto
 const TIPOS = {
@@ -11,11 +15,18 @@ const TIPOS = {
     critica: 'checkbox'
 }
 
+// Cómo se llama cada lista de relaciones en el formulario de su origen
+const TITULOS_LISTA = {
+    USA: 'Ensambles que usa',
+    CONTIENE: 'Componentes (piezas o subensambles)',
+    SURTE: 'Piezas que surte'
+}
+
 // Consultas especializadas: "entrada" es la entidad que se elige en el selector
 const CONSULTAS = [
-    { titulo: 'Impacto de un proveedor', pregunta: 'Si falla este proveedor, ¿qué marcas y modelos se afectan?', ruta: 'impacto/proveedor', entrada: 'proveedores' },
-    { titulo: 'Impacto de una pieza', pregunta: 'Si falla esta pieza, ¿qué marcas y modelos se afectan?', ruta: 'impacto/pieza', entrada: 'piezas' },
-    { titulo: 'Reutilización', pregunta: '¿Qué ensambles de otras marcas en la misma plataforma puede adoptar este modelo?', ruta: 'reutilizacion', entrada: 'modelos' },
+    { titulo: 'Impacto de un proveedor', pregunta: 'Si falla este proveedor, ¿qué marcas y modelos se afectan?', ruta: 'impacto/proveedor', entrada: 'Proveedor' },
+    { titulo: 'Impacto de una pieza', pregunta: 'Si falla esta pieza, ¿qué marcas y modelos se afectan?', ruta: 'impacto/pieza', entrada: 'Pieza' },
+    { titulo: 'Reutilización', pregunta: '¿Qué ensambles de otras marcas en la misma plataforma puede adoptar este modelo?', ruta: 'reutilizacion', entrada: 'Modelo' },
     { titulo: 'Piezas compartidas', pregunta: '¿Qué piezas se usan en más de una marca?', ruta: 'piezas-compartidas' },
     { titulo: 'Riesgo: proveedor único', pregunta: '¿Qué piezas dependen de un solo proveedor? (críticas primero)', ruta: 'riesgo/proveedor-unico' },
     { titulo: 'Riesgo: modelo único', pregunta: '¿Qué piezas usa un solo modelo? (candidatas a estandarizar)', ruta: 'riesgo/modelo-unico' },
@@ -23,6 +34,7 @@ const CONSULTAS = [
 ]
 
 let esquema
+let turnoCatalogo = 0 // evita que una sección lenta reemplace a la que el usuario abrió después
 
 // ---------- Utilidades ----------
 
@@ -83,7 +95,7 @@ const confirmarYEjecutar = (pregunta, accion) => intentar(async () => {
 })
 
 function formatear(valor) {
-    if (Array.isArray(valor)) return valor.join(', ')
+    if (Array.isArray(valor)) return valor.map(formatear).join(', ')
     if (typeof valor === 'boolean') return valor ? 'Sí' : 'No'
     if (valor && typeof valor === 'object') return Object.entries(valor).map(([k, v]) => `${k}: ${v}`).join(', ')
     return valor ?? ''
@@ -111,18 +123,16 @@ function asignar(input, valor) {
     else input.value = valor ?? ''
 }
 
-function campo(nombre) {
-    const input = el('input', { name: nombre, type: TIPOS[nombre] || 'text', step: 'any' })
-    return el('label', {}, legible(nombre), input)
-}
+const input = (nombre) => el('input', { name: nombre, type: TIPOS[nombre] || 'text', step: 'any', placeholder: legible(nombre) })
+const campo = (nombre) => el('label', {}, legible(nombre), input(nombre))
 
-// Lee los inputs de un formulario y convierte cada valor a su tipo (los vacíos se omiten)
-function leer(form, propiedades) {
+// Lee los inputs de un contenedor y convierte cada valor a su tipo (los vacíos se omiten)
+function leer(contenedor, propiedades) {
     const datos = {}
     for (const nombre of propiedades) {
-        const input = form.elements[nombre]
-        if (input.type === 'checkbox') datos[nombre] = input.checked
-        else if (input.value !== '') datos[nombre] = input.type === 'number' ? Number(input.value) : input.value
+        const entrada = contenedor.querySelector(`[name="${nombre}"]`)
+        if (entrada.type === 'checkbox') datos[nombre] = entrada.checked
+        else if (entrada.value !== '') datos[nombre] = entrada.type === 'number' ? Number(entrada.value) : entrada.value
     }
     return datos
 }
@@ -130,26 +140,125 @@ function leer(form, propiedades) {
 const rutaDeEtiqueta = (etiqueta) =>
     Object.keys(esquema.ENTIDADES).find((ruta) => esquema.ENTIDADES[ruta].etiqueta === etiqueta)
 
-// Opciones de un <select> con los nodos de una o varias entidades
-async function opciones(rutas) {
-    const listas = await Promise.all(rutas.map((ruta) => api('GET', ruta)))
-    return listas.flat().map((nodo) => el('option', { value: nodo.codigo }, `${nodo.codigo} · ${nodo.nombre}`))
+// Nodos de una o varias etiquetas, para llenar selectores
+async function nodosDe(etiquetas) {
+    const listas = await Promise.all(etiquetas.map(async (etiqueta) =>
+        (await api('GET', rutaDeEtiqueta(etiqueta))).map((nodo) => ({ ...nodo, etiqueta }))))
+    return listas.flat()
+}
+
+// <option> por nodo; si hay varias etiquetas (ej. Ensamble y Pieza) se agrupan
+function opciones(nodos) {
+    const opcion = (nodo) => el('option', { value: nodo.codigo }, `${nodo.codigo} · ${nodo.nombre}`)
+    const etiquetas = [...new Set(nodos.map((nodo) => nodo.etiqueta))]
+    if (etiquetas.length < 2) return nodos.map(opcion)
+    return etiquetas.map((etiqueta) => el('optgroup', { label: etiqueta }, nodos.filter((n) => n.etiqueta === etiqueta).map(opcion)))
 }
 
 const panel = (...hijos) => el('div', { className: 'panel' }, ...hijos)
 
-// ---------- Catálogo: CRUD de una entidad ----------
+// ---------- Relaciones dentro del formulario de un nodo ----------
+
+// Relación única (ej. la marca de un modelo): un selector en el formulario del destino
+async function selectorPadre(tipo, { origen }) {
+    const select = el('select', {}, el('option', { value: '' }, '— ninguno —'), opciones(await nodosDe([origen])))
+    return {
+        tipo,
+        columna: origen,
+        elemento: el('label', {}, origen, select),
+        actual: (relaciones, codigo) => relaciones.find((r) => r.destino === codigo)?.origen || '',
+        mostrar: (relaciones, codigo) => { select.value = relaciones.find((r) => r.destino === codigo)?.origen || '' },
+        limpiar: () => { select.value = '' },
+
+        // Asignar otro padre reemplaza al anterior (lo hace el backend); vaciarlo quita la relación
+        async guardar(relaciones, codigo) {
+            const anterior = this.actual(relaciones, codigo)
+            if (select.value === anterior) return
+            if (select.value) await api('PUT', `relaciones/${tipo}/${enc(select.value)}/${enc(codigo)}`, {})
+            else await api('DELETE', `relaciones/${tipo}/${enc(anterior)}/${enc(codigo)}`)
+        }
+    }
+}
+
+// Las demás relaciones (ej. los ensambles que usa un modelo): filas en el formulario del origen,
+// cada una con su destino y las propiedades de la relación (cantidad, costo, ...)
+async function listaHijos(tipo, { destino, propiedades }) {
+    const candidatos = await nodosDe(destino)
+    const filas = el('div', { className: 'filas' })
+
+    function agregarFila(codigoDestino = '', valores = {}) {
+        const select = el('select', { name: 'destino' }, el('option', { value: '' }, '— elegir —'), opciones(candidatos))
+        select.value = codigoDestino
+        const entradas = propiedades.map((nombre) => {
+            const entrada = input(nombre)
+            asignar(entrada, valores[nombre])
+            return entrada
+        })
+        const fila = el('div', { className: 'fila' }, select, entradas,
+            el('button', { type: 'button', className: 'peligro', title: 'Quitar', onclick: () => fila.remove() }, '✕'))
+        filas.append(fila)
+    }
+
+    const deseadas = (codigo) => [...filas.children]
+        .map((fila) => ({ destino: fila.querySelector('select').value, propiedades: leer(fila, propiedades) }))
+        .filter((fila) => fila.destino && fila.destino !== codigo) // un nodo no se relaciona consigo mismo
+
+    const titulo = TITULOS_LISTA[tipo] || `${destino.join(' o ')} (${tipo})`
+    return {
+        tipo,
+        columna: titulo,
+        elemento: el('fieldset', {}, el('legend', {}, titulo), filas,
+            el('button', { type: 'button', onclick: () => agregarFila() }, '+ Agregar')),
+        actual: (relaciones, codigo) => relaciones.filter((r) => r.origen === codigo)
+            .map((r) => [r.destino, formatear(r.propiedades)].filter(Boolean).join(' · ')),
+        mostrar: (relaciones, codigo) => {
+            filas.replaceChildren()
+            relaciones.filter((r) => r.origen === codigo).forEach((r) => agregarFila(r.destino, r.propiedades))
+        },
+        limpiar: () => filas.replaceChildren(),
+
+        // Quita las filas eliminadas y crea o actualiza las que quedan
+        async guardar(relaciones, codigo) {
+            const quedan = deseadas(codigo)
+            for (const r of relaciones.filter((r) => r.origen === codigo)) {
+                if (!quedan.some((d) => d.destino === r.destino)) {
+                    await api('DELETE', `relaciones/${tipo}/${enc(codigo)}/${enc(r.destino)}`)
+                }
+            }
+            for (const d of quedan) {
+                await api('PUT', `relaciones/${tipo}/${enc(codigo)}/${enc(d.destino)}`, d.propiedades)
+            }
+        }
+    }
+}
+
+// Editores de relaciones que van en el formulario de una etiqueta, según el esquema
+function editoresDe(etiqueta) {
+    return Promise.all(Object.entries(esquema.RELACIONES).flatMap(([tipo, relacion]) => {
+        if (relacion.unico && relacion.destino.includes(etiqueta)) return [selectorPadre(tipo, relacion)]
+        if (!relacion.unico && relacion.origen === etiqueta) return [listaHijos(tipo, relacion)]
+        return []
+    }))
+}
+
+// ---------- Catálogo: un nodo con sus relaciones ----------
 
 async function vistaEntidad(ruta) {
+    const turno = ++turnoCatalogo
     const { etiqueta, propiedades } = esquema.ENTIDADES[ruta]
+    const editores = await editoresDe(etiqueta)
+    if (turno !== turnoCatalogo) return // el usuario ya abrió otra sección
+
     let editando = null
+    let relaciones = {} // tipo → relaciones actuales de ese tipo
 
     const titulo = el('h2')
     const codigo = el('input', { name: 'codigo', required: true })
+    const camposNodo = el('div', { className: 'formulario' }, el('label', {}, 'codigo', codigo), propiedades.map(campo))
     const lista = el('div')
     const form = el('form', { className: 'formulario' },
-        el('label', {}, 'codigo', codigo),
-        propiedades.map(campo),
+        camposNodo,
+        editores.map((editor) => editor.elemento),
         el('div', { className: 'botones' },
             el('button', { type: 'submit' }, 'Guardar'),
             el('button', { type: 'button', onclick: () => limpiar() }, 'Cancelar')
@@ -159,6 +268,7 @@ async function vistaEntidad(ruta) {
     function limpiar() {
         editando = null
         form.reset()
+        editores.forEach((editor) => editor.limpiar())
         codigo.disabled = false
         titulo.textContent = `Crear ${etiqueta}`
     }
@@ -167,14 +277,26 @@ async function vistaEntidad(ruta) {
         editando = nodo.codigo
         codigo.value = nodo.codigo
         codigo.disabled = true // el codigo es el identificador, no se cambia
-        propiedades.forEach((nombre) => asignar(form.elements[nombre], nodo[nombre]))
+        propiedades.forEach((nombre) => asignar(camposNodo.querySelector(`[name="${nombre}"]`), nodo[nombre]))
+        editores.forEach((editor) => editor.mostrar(relaciones[editor.tipo], nodo.codigo))
         titulo.textContent = `Editar ${etiqueta} ${nodo.codigo}`
+        form.scrollIntoView({ behavior: 'smooth' })
     }
 
     async function cargar() {
-        const nodos = await api('GET', ruta)
-        lista.replaceChildren(tabla(nodos, (nodo) => [
-            el('button', { onclick: () => editar(nodo) }, 'Editar'),
+        const [nodos, ...listas] = await Promise.all([
+            api('GET', ruta),
+            ...editores.map((editor) => api('GET', `relaciones/${editor.tipo}`))
+        ])
+        relaciones = Object.fromEntries(editores.map((editor, i) => [editor.tipo, listas[i]]))
+
+        // Cada relación se muestra como una columna más de la tabla
+        const filas = nodos.map((nodo) => ({
+            ...nodo,
+            ...Object.fromEntries(editores.map((editor) => [editor.columna, editor.actual(relaciones[editor.tipo], nodo.codigo)]))
+        }))
+        lista.replaceChildren(tabla(filas, (nodo) => [
+            el('button', { onclick: () => editar(nodos.find((n) => n.codigo === nodo.codigo)) }, 'Editar'),
             el('button', {
                 className: 'peligro',
                 onclick: confirmarYEjecutar(`¿Eliminar ${etiqueta} ${nodo.codigo} y todas sus relaciones?`, async () => {
@@ -189,14 +311,15 @@ async function vistaEntidad(ruta) {
 
     form.addEventListener('submit', intentar(async (evento) => {
         evento.preventDefault()
-        const datos = leer(form, propiedades)
-        if (editando) {
-            await api('PUT', `${ruta}/${enc(editando)}`, datos)
-            avisar(`Se actualizó ${etiqueta} ${editando}`)
-        } else {
-            await api('POST', ruta, { codigo: codigo.value.trim(), ...datos })
-            avisar(`Se creó ${etiqueta} ${codigo.value.trim()}`)
-        }
+        const datos = leer(camposNodo, propiedades)
+        const codigoNodo = editando || codigo.value.trim()
+        if (editando) await api('PUT', `${ruta}/${enc(editando)}`, datos)
+        else await api('POST', ruta, { codigo: codigoNodo, ...datos })
+
+        // Primero el nodo, después sus relaciones (necesitan que el nodo exista)
+        for (const editor of editores) await editor.guardar(relaciones[editor.tipo], codigoNodo)
+
+        avisar(`${editando ? 'Se actualizó' : 'Se creó'} ${etiqueta} ${codigoNodo}`)
         limpiar()
         await cargar()
     }))
@@ -206,80 +329,12 @@ async function vistaEntidad(ruta) {
     await cargar()
 }
 
-// ---------- Catálogo: relaciones ----------
-
-async function vistaRelaciones() {
-    const selectorTipo = el('select', {}, Object.entries(esquema.RELACIONES).map(([tipo, { origen, destino }]) =>
-        el('option', { value: tipo }, `(${origen}) -[${tipo}]-> (${destino.join(' | ')})`)
-    ))
-    const form = el('form', { className: 'formulario' })
-    const lista = el('div')
-    const tituloLista = el('h2')
-
-    async function mostrarTipo() {
-        const tipo = selectorTipo.value
-        const { origen, destino, propiedades } = esquema.RELACIONES[tipo]
-        // Si el usuario cambió de tipo mientras cargaba, esta respuesta ya no se muestra
-        const sigueSeleccionado = () => selectorTipo.value === tipo
-
-        const selectorOrigen = el('select', { name: 'origen' }, await opciones([rutaDeEtiqueta(origen)]))
-        const selectorDestino = el('select', { name: 'destino' }, await opciones(destino.map(rutaDeEtiqueta)))
-        if (!sigueSeleccionado()) return
-
-        async function cargar() {
-            const relaciones = await api('GET', `relaciones/${tipo}`)
-            if (!sigueSeleccionado()) return
-            tituloLista.textContent = `Registros: ${tipo} (${relaciones.length})`
-            lista.replaceChildren(tabla(relaciones, (relacion) => [
-                el('button', {
-                    onclick: () => {
-                        selectorOrigen.value = relacion.origen
-                        selectorDestino.value = relacion.destino
-                        propiedades.forEach((nombre) => asignar(form.elements[nombre], relacion.propiedades[nombre]))
-                    }
-                }, 'Editar'),
-                el('button', {
-                    className: 'peligro',
-                    onclick: confirmarYEjecutar(`¿Eliminar ${relacion.origen} -[${tipo}]-> ${relacion.destino}?`, async () => {
-                        await api('DELETE', `relaciones/${tipo}/${enc(relacion.origen)}/${enc(relacion.destino)}`)
-                        avisar('Relación eliminada')
-                        await cargar()
-                    })
-                }, 'Eliminar')
-            ]))
-        }
-
-        // PUT crea la relación o, si ya existe, actualiza sus propiedades
-        form.onsubmit = intentar(async (evento) => {
-            evento.preventDefault()
-            await api('PUT', `relaciones/${tipo}/${enc(selectorOrigen.value)}/${enc(selectorDestino.value)}`, leer(form, propiedades))
-            avisar('Relación guardada')
-            await cargar()
-        })
-
-        form.replaceChildren(
-            el('label', {}, `Origen (${origen})`, selectorOrigen),
-            el('label', {}, `Destino (${destino.join(' o ')})`, selectorDestino),
-            ...propiedades.map(campo),
-            el('div', { className: 'botones' }, el('button', { type: 'submit' }, 'Guardar relación'))
-        )
-        await cargar()
-    }
-
-    selectorTipo.addEventListener('change', intentar(mostrarTipo))
-    $('#contenido-catalogo').replaceChildren(
-        panel(el('h2', {}, 'Relaciones'), el('label', {}, 'Tipo de relación', selectorTipo), form),
-        panel(tituloLista, lista)
-    )
-    await mostrarTipo()
-}
-
 // ---------- Consultas especializadas ----------
 
 async function vistaConsultas() {
     const tarjetas = await Promise.all(CONSULTAS.map(async ({ titulo, pregunta, ruta, entrada }) => {
         const resultado = el('div', { className: 'resultado' })
-        const selector = entrada && el('select', {}, await opciones([entrada]))
+        const selector = entrada && el('select', {}, opciones(await nodosDe([entrada])))
 
         const consultar = intentar(async () => {
             const datos = await api('GET', `consultas/${ruta}${selector ? `/${enc(selector.value)}` : ''}`)
@@ -306,12 +361,13 @@ const activar = (grupo, boton) =>
 async function iniciar() {
     esquema = await api('GET', 'esquema')
 
-    const secciones = [
-        ...Object.entries(esquema.ENTIDADES).map(([ruta, { etiqueta }]) => [etiqueta, () => vistaEntidad(ruta)]),
-        ['Relaciones', vistaRelaciones]
-    ]
-    $('#secciones').replaceChildren(...secciones.map(([nombre, vista]) =>
-        el('button', { onclick: intentar(async (evento) => { activar('#secciones', evento.currentTarget); await vista() }) }, nombre)
+    $('#secciones').replaceChildren(...Object.entries(esquema.ENTIDADES).map(([ruta, { etiqueta }]) =>
+        el('button', {
+            onclick: intentar(async (evento) => {
+                activar('#secciones', evento.currentTarget)
+                await vistaEntidad(ruta)
+            })
+        }, etiqueta)
     ))
 
     document.querySelectorAll('#pestanas button').forEach((boton) => boton.addEventListener('click', intentar(async () => {

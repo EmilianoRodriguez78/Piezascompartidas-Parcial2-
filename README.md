@@ -67,16 +67,26 @@ Al arrancar, el servidor crea (si no existen) las restricciones de unicidad de `
 | Pieza | codigo (único), nombre, categoria, critica |
 | Proveedor | codigo (único), nombre, pais, calificacion |
 
+`TIENE_MARCA`, `FABRICA` y `BASE_DE` son **únicas**: una marca pertenece a un solo grupo, y un modelo tiene una sola marca y una sola plataforma. Asignar otra reemplaza a la anterior.
+
 El modelo completo está definido en un solo lugar, [`backend/config/esquema.js`](backend/config/esquema.js). Las rutas, la validación y el seeding se generan a partir de él.
 
 ## Frontend
 
 Está en `public/` y no usa frameworks ni compilación: Express lo sirve en `http://localhost:5000`, así que no hace falta otro servidor ni configurar CORS. El navegador solo habla con la API, nunca con Neo4j.
 
-* **Catálogo**: una sección por entidad (tabla, formulario para crear o editar y botón para eliminar) y una sección de **Relaciones** para asignar, editar o quitar relaciones con listas desplegables.
+* **Catálogo**: una sección por entidad, con tabla, formulario para crear o editar y botón para eliminar. Las relaciones se capturan en el mismo formulario del nodo y aparecen como columnas en la tabla:
+
+  | Formulario | Relaciones que incluye |
+  |---|---|
+  | Marca | Grupo al que pertenece |
+  | Modelo | Marca, Plataforma y ensambles que usa |
+  | Ensamble | Componentes (piezas o subensambles) con su cantidad |
+  | Proveedor | Piezas que surte, con costo y días de entrega |
+
 * **Consultas**: las consultas especializadas, cada una con su selector y su tabla de resultados.
 
-Los formularios se generan a partir de `GET /api/esquema`, que devuelve el mismo `esquema.js` del backend.
+Los formularios se generan a partir de `GET /api/esquema`, que devuelve el mismo `esquema.js` del backend. Las relaciones únicas aparecen como un selector en el formulario del destino; las demás, como una lista de filas en el formulario del origen.
 
 ## Endpoints
 
@@ -105,15 +115,15 @@ curl -X POST http://localhost:5000/api/piezas -H "Content-Type: application/json
 | Método | Ruta | Descripción |
 |---|---|---|
 | GET | `/api/relaciones/<TIPO>` | Lista las relaciones de ese tipo |
-| PUT | `/api/relaciones/<TIPO>/:origen/:destino` | Crea la relación o actualiza sus propiedades |
+| PUT | `/api/relaciones/<TIPO>/:origen/:destino` | Crea la relación o actualiza sus propiedades (en las únicas, reemplaza la anterior del destino) |
 | DELETE | `/api/relaciones/<TIPO>/:origen/:destino` | Elimina la relación |
 
 ```bash
 # Asignar un ensamble a un modelo
-curl -X PUT http://localhost:5000/api/relaciones/USA/MOD-VE/ENS-SUSP-NEU
+curl -X PUT http://localhost:5000/api/relaciones/USA/MOD-VE/ENS-SUSP-NEUM
 
 # Un proveedor surte una pieza (con propiedades en la relación)
-curl -X PUT http://localhost:5000/api/relaciones/SURTE/PRV-TORQ/PZ-INFLADOR -H "Content-Type: application/json" -d "{\"costo_unitario\":44,\"dias_entrega\":25}"
+curl -X PUT http://localhost:5000/api/relaciones/SURTE/PRV-STAHL/PZ-INFLADOR -H "Content-Type: application/json" -d "{\"costo_unitario\":44,\"dias_entrega\":25}"
 
 # Cambiar el proveedor de una pieza = quitar la relación anterior y crear la nueva
 curl -X DELETE http://localhost:5000/api/relaciones/SURTE/PRV-KOGANE/PZ-INFLADOR
